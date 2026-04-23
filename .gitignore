@@ -1,0 +1,29 @@
+# Ignore massive data directories
+datasets/
+checkpoints/
+checkpoints_256/
+experiments/
+results/
+models/
+
+# Ignore pipeline local checkpoints/results
+src/**/checkpoints/
+src/**/results/
+src/**/__pycache__/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+venv*/
+.env
+.DS_Store
+.idea/
+.vscode/
+
+# Ignore Jupyter notebook checkpoints
+.ipynb_checkpoints/

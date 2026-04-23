@@ -1,0 +1,415 @@
+"""
+compare_r_final.py
+==================
+Side-by-side result comparison of:
+  1. R_low   — original reflectance from low-light image  (decompose_retinex.py)
+  2. R_best  — fine-tuned reflectance (best variant from fine_tune_reflectance.py)
+  3. R_high  — ground-truth reflectance from the high-light image
+
+Per-image output
+----------------
+  Row 0  Full images:   R_low | R_best | R_high | diff(R_low, R_high)×5 | diff(R_best, R_high)×5
+  Row 1  Zoomed crops:  same 5 panels
+  Row 2  Histograms + metrics summary bar-chart
+
+Global summary
+--------------
+  Bar chart: avg PSNR & SSIM for R_low vs R_high  and  R_best vs R_high
+  Scatter:   per-image improvement
+"""
+
+import cv2
+import numpy as np
+import os
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+from matplotlib.patches import FancyBboxPatch
+from skimage.metrics import peak_signal_noise_ratio as calc_psnr
+from skimage.metrics import structural_similarity  as calc_ssim
+
+# ── Paths ─────────────────────────────────────────────────────────────────────
+BASE_DIR  = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+decom_dir = os.path.join(BASE_DIR, "results/decomposition")
+best_dir  = os.path.join(BASE_DIR, "results/reflectance_finetuned")
+out_dir   = os.path.join(BASE_DIR, "results/reflectance_final_comparison")
+os.makedirs(out_dir, exist_ok=True)
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def load(path):
+    img = cv2.imread(path)
+    if img is None:
+        raise FileNotFoundError(f"Missing: {path}")
+    return img.astype(np.float32) / 255.0
+
+
+def to_rgb(arr):
+    u8 = (np.clip(arr, 0, 1) * 255).astype(np.uint8)
+    return cv2.cvtColor(u8, cv2.COLOR_BGR2RGB)
+
+
+def diff_map(a, b, amplify=5):
+    """Amplified absolute difference (mean over channels)."""
+    return np.clip(np.abs(a - b).mean(axis=2) * amplify, 0, 1)
+
+
+def psnr_ssim(est, ref):
+    a = (np.clip(est, 0, 1) * 255).astype(np.uint8)
+    b = (np.clip(ref, 0, 1) * 255).astype(np.uint8)
+    p = calc_psnr(b, a, data_range=255)
+    s = calc_ssim(b, a, channel_axis=2, data_range=255)
+    return p, s
+
+
+def mae(a, b):
+    return np.mean(np.abs(a - b))
+
+
+def styled_ax(fig, gs_slot, bg="#0d0d1e"):
+    ax = fig.add_subplot(gs_slot)
+    ax.set_facecolor(bg)
+    for sp in ax.spines.values():
+        sp.set_edgecolor("#333")
+    ax.tick_params(colors="#aaa")
+    return ax
+
+
+# ── Per-image comparison ──────────────────────────────────────────────────────
+img_names = sorted(
+    f for f in os.listdir(decom_dir)
+    if f.endswith("_R_low.png")
+)
+
+# Global accumulators
+records = []   # (base, psnr_low, ssim_low, psnr_best, ssim_best, mae_low, mae_best)
+
+print(f"{'Image':<10}  {'PSNR(R_low↔R_high)':>20}  {'PSNR(R_best↔R_high)':>21}  "
+      f"{'SSIM(R_low)':>11}  {'SSIM(R_best)':>12}  {'ΔPSNR':>7}  {'ΔSSIM':>7}")
+print("-" * 105)
+
+for fname in img_names:
+    base = fname.replace("_R_low.png", "")
+
+    R_low  = load(os.path.join(decom_dir, f"{base}_R_low.png"))
+    R_high = load(os.path.join(decom_dir, f"{base}_R_high.png"))
+    R_best = load(os.path.join(best_dir,  f"{base}_R_best.png"))
+
+    # Resize if shapes don't match (shouldn't happen, but safety)
+    if R_best.shape != R_high.shape:
+        h, w = R_high.shape[:2]
+        R_best = cv2.resize(R_best, (w, h), interpolation=cv2.INTER_LINEAR)
+    if R_low.shape != R_high.shape:
+        h, w = R_high.shape[:2]
+        R_low = cv2.resize(R_low, (w, h), interpolation=cv2.INTER_LINEAR)
+
+    p_low,  s_low  = psnr_ssim(R_low,  R_high)
+    p_best, s_best = psnr_ssim(R_best, R_high)
+    m_low  = mae(R_low,  R_high)
+    m_best = mae(R_best, R_high)
+
+    records.append((base, p_low, s_low, p_best, s_best, m_low, m_best))
+
+    dp = p_best - p_low
+    ds = s_best - s_low
+    print(f"{base:<10}  {p_low:>20.3f}  {p_best:>21.3f}  "
+          f"{s_low:>11.4f}  {s_best:>12.4f}  {dp:>+7.3f}  {ds:>+7.4f}")
+
+    # ── Figure ────────────────────────────────────────────────────────────────
+    H, W = R_high.shape[:2]
+    cx, cy = W // 6, H // 6
+    cw, ch = W // 3, H // 3
+
+    diff_low  = diff_map(R_low,  R_high, amplify=5)
+    diff_best = diff_map(R_best, R_high, amplify=5)
+
+    fig = plt.figure(figsize=(26, 15))
+    fig.patch.set_facecolor("#111122")
+
+    TKW = dict(color="white", fontsize=9, fontweight="bold", pad=5)
+    MKW = dict(color="#ffe066", fontsize=8, va="top", ha="left")
+
+    gs = gridspec.GridSpec(3, 5, figure=fig,
+                           hspace=0.36, wspace=0.06,
+                           left=0.03, right=0.97,
+                           top=0.90, bottom=0.04)
+
+    # ── Row 0: full images ───────────────────────────────────────────────────
+    panels = [
+        (to_rgb(R_low),             "R_low  [original]"),
+        (to_rgb(R_best),            "R_best  [fine-tuned]"),
+        (to_rgb(R_high),            "R_high  [ground truth]"),
+        (diff_low,                  "Diff(R_low, R_high) × 5"),
+        (diff_best,                 "Diff(R_best, R_high) × 5"),
+    ]
+
+    for col, (im, title) in enumerate(panels):
+        ax = fig.add_subplot(gs[0, col])
+        ax.set_facecolor("#111122")
+        for sp in ax.spines.values():
+            sp.set_edgecolor("#333")
+        ax.axis("off")
+
+        if col >= 3:                          # diff maps — inferno colourmap
+            ax.imshow(im, cmap="inferno", vmin=0, vmax=1)
+        else:
+            ax.imshow(im)
+
+        ax.set_title(title, **TKW)
+
+        # Draw crop box on image panels
+        if col < 3:
+            from matplotlib.patches import Rectangle
+            rect = Rectangle((cx, cy), cw, ch,
+                              linewidth=1.8, edgecolor="#00ff88", facecolor="none")
+            ax.add_patch(rect)
+
+        # Metric overlays
+        if col == 0:
+            ax.text(0.01, 0.99,
+                    f"PSNR {p_low:.2f} dB\nSSIM {s_low:.4f}\nMAE  {m_low:.4f}",
+                    transform=ax.transAxes, **MKW,
+                    bbox=dict(fc="#000000bb", ec="none", pad=3))
+        elif col == 1:
+            ax.text(0.01, 0.99,
+                    f"PSNR {p_best:.2f} dB\nSSIM {s_best:.4f}\nMAE  {m_best:.4f}",
+                    transform=ax.transAxes, **MKW,
+                    bbox=dict(fc="#000000bb", ec="none", pad=3))
+        elif col == 3:
+            ax.text(0.01, 0.99,
+                    f"Mean diff {np.mean(diff_low):.4f}",
+                    transform=ax.transAxes, **MKW,
+                    bbox=dict(fc="#000000bb", ec="none", pad=3))
+        elif col == 4:
+            ax.text(0.01, 0.99,
+                    f"Mean diff {np.mean(diff_best):.4f}",
+                    transform=ax.transAxes, **MKW,
+                    bbox=dict(fc="#000000bb", ec="none", pad=3))
+
+    # ── Row 1: zoomed crops ──────────────────────────────────────────────────
+    crops = [
+        to_rgb(R_low [cy:cy+ch, cx:cx+cw]),
+        to_rgb(R_best[cy:cy+ch, cx:cx+cw]),
+        to_rgb(R_high[cy:cy+ch, cx:cx+cw]),
+        diff_low [cy:cy+ch, cx:cx+cw],
+        diff_best[cy:cy+ch, cx:cx+cw],
+    ]
+    crop_titles = [
+        "R_low  [crop]",
+        "R_best  [crop]",
+        "R_high  [crop]",
+        "Diff(R_low)  [crop] × 5",
+        "Diff(R_best) [crop] × 5",
+    ]
+    for col, (im, title) in enumerate(zip(crops, crop_titles)):
+        ax = fig.add_subplot(gs[1, col])
+        ax.set_facecolor("#111122")
+        for sp in ax.spines.values():
+            sp.set_edgecolor("#444")
+        ax.axis("off")
+        if col >= 3:
+            ax.imshow(im, cmap="inferno", vmin=0, vmax=1)
+        else:
+            ax.imshow(im)
+        ax.set_title(title, **TKW)
+
+    # ── Row 2: histogram + metric bar-chart ──────────────────────────────────
+    # Pixel-intensity histograms (grayscale)
+    ax_hist = styled_ax(fig, gs[2, :2])
+    for R, label, color in [
+        (R_low,  "R_low  (original)",    "#ff6b6b"),
+        (R_best, "R_best (fine-tuned)",  "#6bcb77"),
+        (R_high, "R_high (ground truth)","#4d96ff"),
+    ]:
+        gray = cv2.cvtColor((np.clip(R, 0, 1) * 255).astype(np.uint8),
+                             cv2.COLOR_BGR2GRAY)
+        ax_hist.hist(gray.flatten(), bins=64, range=(0, 255),
+                     alpha=0.55, label=label, color=color, density=True)
+    ax_hist.set_title("Pixel intensity distribution (reflectance)", color="white",
+                       fontsize=9, fontweight="bold")
+    ax_hist.set_xlabel("Intensity", color="#ccc"); ax_hist.set_ylabel("Density", color="#ccc")
+    ax_hist.legend(fontsize=8, facecolor="#1a1a2e", labelcolor="white")
+
+    # PSNR / SSIM / MAE bar-chart
+    ax_bar = styled_ax(fig, gs[2, 2])
+    labels   = ["R_low", "R_best"]
+    psnrs    = [p_low,  p_best]
+    ssims    = [s_low,  s_best]
+    maes     = [m_low,  m_best]
+    bar_clrs = ["#ff6b6b", "#6bcb77"]
+    x        = np.arange(2)
+    w        = 0.25
+
+    ax_bar.bar(x - w, psnrs, w, label="PSNR (dB)",   color=[c + "cc" for c in bar_clrs], alpha=0.9)
+    ax_bar.bar(x,     [s * 30 for s in ssims], w,
+               label="SSIM × 30", color=bar_clrs, alpha=0.75)
+    ax_bar.bar(x + w, [m * 300 for m in maes], w,
+               label="MAE × 300", color=["#ffa07a", "#90ee90"], alpha=0.75)
+    ax_bar.set_xticks(x); ax_bar.set_xticklabels(labels, color="#ccc", fontsize=9)
+    ax_bar.set_title("Metrics (scaled to PSNR range)", color="white",
+                      fontsize=9, fontweight="bold")
+    ax_bar.legend(fontsize=7, facecolor="#1a1a2e", labelcolor="white")
+
+    # Improvement text panel
+    ax_txt = styled_ax(fig, gs[2, 3:])
+    ax_txt.axis("off")
+    improve_psnr = p_best - p_low
+    improve_ssim = s_best - s_low
+    improve_mae  = m_low  - m_best   # positive = lower error
+    arrow_p = "▲" if improve_psnr >= 0 else "▼"
+    arrow_s = "▲" if improve_ssim >= 0 else "▼"
+    arrow_m = "▲" if improve_mae  >= 0 else "▼"
+
+    txt = (
+        f"COMPARISON SUMMARY  —  {base}.png\n"
+        f"{'─'*48}\n\n"
+        f"  Metric       R_low       R_best      Δ\n"
+        f"  {'─'*44}\n"
+        f"  PSNR (dB)    {p_low:>7.3f}     {p_best:>7.3f}   {arrow_p} {abs(improve_psnr):.3f}\n"
+        f"  SSIM         {s_low:>7.4f}     {s_best:>7.4f}   {arrow_s} {abs(improve_ssim):.4f}\n"
+        f"  MAE          {m_low:>7.4f}     {m_best:>7.4f}   {arrow_m} {abs(improve_mae):.4f}\n\n"
+        f"  Fine-tuning pipeline used for R_best:\n"
+        f"    Illumination : Bilateral filter (max-channel)\n"
+        f"    R denoising  : NL-Means (h=6, hColor=6,\n"
+        f"                   templateWin=7, searchWin=21)\n\n"
+        f"  NL-Means preserves texture while suppressing\n"
+        f"  the sensor noise amplified by S/I in dark\n"
+        f"  regions, bringing R_low closer to R_high."
+    )
+    ax_txt.text(0.03, 0.97, txt,
+                transform=ax_txt.transAxes,
+                color="#e0e0e0", fontsize=8.5, fontfamily="monospace",
+                va="top", ha="left",
+                bbox=dict(fc="#0a0a1a", ec="#445", pad=9, boxstyle="round"))
+
+    # Overall title
+    fig.suptitle(
+        f"Reflectance Comparison — {base}.png    "
+        f"PSNR: {p_low:.2f} → {p_best:.2f} dB  ({improve_psnr:+.2f})  |  "
+        f"SSIM: {s_low:.4f} → {s_best:.4f}  ({improve_ssim:+.4f})",
+        color="white", fontsize=11, fontweight="bold", y=0.96
+    )
+
+    plt.savefig(os.path.join(out_dir, f"{base}_R_compare_final.png"),
+                dpi=140, bbox_inches="tight", facecolor=fig.get_facecolor())
+    plt.close()
+
+# ── Global summary ────────────────────────────────────────────────────────────
+bases      = [r[0] for r in records]
+psnr_lows  = np.array([r[1] for r in records])
+ssim_lows  = np.array([r[2] for r in records])
+psnr_bests = np.array([r[3] for r in records])
+ssim_bests = np.array([r[4] for r in records])
+mae_lows   = np.array([r[5] for r in records])
+mae_bests  = np.array([r[6] for r in records])
+
+print("\n" + "=" * 105)
+print("  GLOBAL AVERAGES")
+print(f"  R_low  vs R_high  —  PSNR: {psnr_lows.mean():.3f} dB  |  "
+      f"SSIM: {ssim_lows.mean():.4f}  |  MAE: {mae_lows.mean():.4f}")
+print(f"  R_best vs R_high  —  PSNR: {psnr_bests.mean():.3f} dB  |  "
+      f"SSIM: {ssim_bests.mean():.4f}  |  MAE: {mae_bests.mean():.4f}")
+print(f"  Δ PSNR  : {(psnr_bests - psnr_lows).mean():+.3f} dB")
+print(f"  Δ SSIM  : {(ssim_bests - ssim_lows).mean():+.4f}")
+print(f"  Δ MAE   : {(mae_bests  - mae_lows ).mean():+.4f}  (negative = improved)")
+print("=" * 105)
+
+# ── Global summary figure ─────────────────────────────────────────────────────
+n = len(bases)
+x = np.arange(n)
+w = 0.35
+
+fig, axes = plt.subplots(1, 3, figsize=(20, 6))
+fig.patch.set_facecolor("#111122")
+
+metric_data = [
+    (axes[0], psnr_lows, psnr_bests, "PSNR (dB) ↑",  "PSNR Comparison per Image"),
+    (axes[1], ssim_lows, ssim_bests, "SSIM ↑",        "SSIM Comparison per Image"),
+    (axes[2], mae_lows,  mae_bests,  "MAE ↓",         "MAE Comparison per Image"),
+]
+
+for ax, vals_low, vals_best, ylabel, title in metric_data:
+    ax.set_facecolor("#0d0d1e")
+    for sp in ax.spines.values(): sp.set_edgecolor("#444")
+    ax.tick_params(colors="#aaa")
+
+    b1 = ax.bar(x - w/2, vals_low,  w, label="R_low  (original)",   color="#ff6b6b", alpha=0.85)
+    b2 = ax.bar(x + w/2, vals_best, w, label="R_best (fine-tuned)", color="#6bcb77", alpha=0.85)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(bases, rotation=45, ha="right", fontsize=8, color="#ccc")
+    ax.set_ylabel(ylabel, color="#ccc")
+    ax.set_title(title, color="white", fontsize=10, fontweight="bold")
+    ax.legend(fontsize=9, facecolor="#1a1a2e", labelcolor="white")
+
+    # Value labels
+    for bar in b1:
+        ax.text(bar.get_x() + bar.get_width()/2,
+                bar.get_height() + max(vals_low.max(), vals_best.max()) * 0.005,
+                f"{bar.get_height():.2f}", ha="center", fontsize=6.5, color="#ffaaaa")
+    for bar in b2:
+        ax.text(bar.get_x() + bar.get_width()/2,
+                bar.get_height() + max(vals_low.max(), vals_best.max()) * 0.005,
+                f"{bar.get_height():.2f}", ha="center", fontsize=6.5, color="#aaffaa")
+
+    # Mean lines
+    ax.axhline(vals_low.mean(),  color="#ff6b6b", linewidth=1.2,
+               linestyle="--", alpha=0.7, label=f"Mean R_low  {vals_low.mean():.3f}")
+    ax.axhline(vals_best.mean(), color="#6bcb77", linewidth=1.2,
+               linestyle="--", alpha=0.7, label=f"Mean R_best {vals_best.mean():.3f}")
+    ax.legend(fontsize=7.5, facecolor="#1a1a2e", labelcolor="white")
+
+fig.suptitle(
+    f"Global Reflectance Comparison — R_low vs R_best vs R_high  "
+    f"(n={n} images)\n"
+    f"PSNR: {psnr_lows.mean():.3f} → {psnr_bests.mean():.3f} dB  "
+    f"({(psnr_bests-psnr_lows).mean():+.3f})   |   "
+    f"SSIM: {ssim_lows.mean():.4f} → {ssim_bests.mean():.4f}  "
+    f"({(ssim_bests-ssim_lows).mean():+.4f})   |   "
+    f"MAE: {mae_lows.mean():.4f} → {mae_bests.mean():.4f}  "
+    f"({(mae_bests-mae_lows).mean():+.4f})",
+    color="white", fontsize=10, fontweight="bold", y=1.01
+)
+plt.tight_layout()
+plt.savefig(os.path.join(out_dir, "global_comparison.png"),
+            dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
+plt.close()
+
+# ── PSNR scatter: R_low vs R_best coloured by improvement ────────────────────
+fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+fig.patch.set_facecolor("#111122")
+
+for ax, x_vals, y_vals, xlabel, ylabel, title in [
+    (axes[0], psnr_lows, psnr_bests, "R_low PSNR (dB)", "R_best PSNR (dB)",
+     "Per-image PSNR: R_low → R_best"),
+    (axes[1], ssim_lows, ssim_bests, "R_low SSIM", "R_best SSIM",
+     "Per-image SSIM: R_low → R_best"),
+]:
+    ax.set_facecolor("#0d0d1e")
+    for sp in ax.spines.values(): sp.set_edgecolor("#444")
+    ax.tick_params(colors="#aaa")
+
+    improved = y_vals >= x_vals
+    ax.scatter(x_vals[ improved], y_vals[ improved], c="#6bcb77", s=80, zorder=3, label="improved ▲")
+    ax.scatter(x_vals[~improved], y_vals[~improved], c="#ff6b6b", s=80, zorder=3, label="regressed ▼")
+
+    lim_min = min(x_vals.min(), y_vals.min()) * 0.98
+    lim_max = max(x_vals.max(), y_vals.max()) * 1.02
+    ax.plot([lim_min, lim_max], [lim_min, lim_max],
+            color="#888", linewidth=1, linestyle="--", label="no change")
+    ax.set_xlim(lim_min, lim_max); ax.set_ylim(lim_min, lim_max)
+    ax.set_xlabel(xlabel, color="#ccc"); ax.set_ylabel(ylabel, color="#ccc")
+    ax.set_title(title, color="white", fontsize=10, fontweight="bold")
+    ax.legend(fontsize=8, facecolor="#1a1a2e", labelcolor="white")
+
+    for i, b in enumerate(bases):
+        ax.annotate(b, (x_vals[i], y_vals[i]), fontsize=7, color="#ddd",
+                    xytext=(4, 3), textcoords="offset points")
+
+fig.suptitle("Scatter: per-image improvement from fine-tuning reflectance",
+             color="white", fontsize=11, fontweight="bold", y=1.02)
+plt.tight_layout()
+plt.savefig(os.path.join(out_dir, "scatter_improvement.png"),
+            dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
+plt.close()
+
+print(f"\nAll comparison figures saved to:\n  {out_dir}")

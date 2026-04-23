@@ -1,0 +1,319 @@
+"""
+rain_model.py
+=============
+RAIN — Retinex-Guided Attention-Based Multimodal Image Enhancement Network
+
+Architecture (left → right):
+  [RGB, R_low, I_low] → Multi-modal Encoders (4 scales)
+                       → Cross-Modal Attention (RGB↔R, RGB↔I)
+                       → Channel Attention (SE Block)
+                       → Feature Fusion
+                       → Self-Attention + Spatial Attention + FFN (Bottleneck)
+                       → Multi-scale Decoder with skip connections
+                       → Enhanced image  +  auxiliary I_predicted
+"""
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+# ── Basic building blocks ─────────────────────────────────────────────────────
+
+class ConvBNReLU(nn.Module):
+    def __init__(self, in_c, out_c, k=3, s=1, p=1):
+        super().__init__()
+        self.block = nn.Sequential(
+            nn.Conv2d(in_c, out_c, k, stride=s, padding=p, bias=False),
+            nn.BatchNorm2d(out_c),
+            nn.ReLU(inplace=True),
+        )
+
+    def forward(self, x):
+        return self.block(x)
+
+
+class ResBlock(nn.Module):
+    """Two-conv residual block with BN."""
+    def __init__(self, c):
+        super().__init__()
+        self.block = nn.Sequential(
+            ConvBNReLU(c, c),
+            nn.Conv2d(c, c, 3, padding=1, bias=False),
+            nn.BatchNorm2d(c),
+        )
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        return self.relu(x + self.block(x))
+
+
+# ── Stream encoders ───────────────────────────────────────────────────────────
+
+class StreamEncoder(nn.Module):
+    """
+    4-scale encoder for one input modality.
+    Returns feature maps at scales s1..s4 (for skip connections).
+    """
+    def __init__(self, in_c, base_c=64):
+        super().__init__()
+        C = base_c
+        self.stem  = ConvBNReLU(in_c, C, k=3)               # full resolution
+        self.down1 = nn.Sequential(ConvBNReLU(C,   C*2, s=2), ResBlock(C*2))   # /2
+        self.down2 = nn.Sequential(ConvBNReLU(C*2, C*4, s=2), ResBlock(C*4))   # /4
+        self.down3 = nn.Sequential(ConvBNReLU(C*4, C*8, s=2), ResBlock(C*8))   # /8
+
+    def forward(self, x):
+        s1 = self.stem(x)
+        s2 = self.down1(s1)
+        s3 = self.down2(s2)
+        s4 = self.down3(s3)
+        return s1, s2, s3, s4
+
+
+# ── Cross-Modal Attention ─────────────────────────────────────────────────────
+
+class CrossModalAttention(nn.Module):
+    """
+    Query from stream A, Key/Value from stream B.
+    Operates on spatial feature maps using 1×1 projections + scaled dot-product.
+    """
+    def __init__(self, c_q, c_kv, c_out):
+        super().__init__()
+        self.proj_q  = nn.Conv2d(c_q,  c_out, 1, bias=False)
+        self.proj_k  = nn.Conv2d(c_kv, c_out, 1, bias=False)
+        self.proj_v  = nn.Conv2d(c_kv, c_out, 1, bias=False)
+        self.proj_out = nn.Conv2d(c_out, c_out, 1, bias=False)
+        self.norm    = nn.BatchNorm2d(c_out)
+        self.scale   = c_out ** -0.5
+
+    def forward(self, fq, fkv):
+        B, _, H, W = fq.shape
+        Q = self.proj_q(fq).flatten(2)            # B, C, HW
+        K = self.proj_k(fkv).flatten(2)
+        V = self.proj_v(fkv).flatten(2)
+
+        attn = torch.bmm(Q.transpose(1, 2), K) * self.scale   # B, HW, HW
+        attn = attn.softmax(dim=-1)
+        out  = torch.bmm(attn, V.transpose(1, 2)).transpose(1, 2)   # B, C, HW
+        out  = out.view(B, -1, H, W)
+        return self.norm(self.proj_out(out))
+
+
+# ── Channel Attention (SE Block) ─────────────────────────────────────────────
+
+class SEBlock(nn.Module):
+    def __init__(self, c, r=8):
+        super().__init__()
+        self.gap = nn.AdaptiveAvgPool2d(1)
+        self.fc  = nn.Sequential(
+            nn.Linear(c, max(c // r, 4)),
+            nn.ReLU(inplace=True),
+            nn.Linear(max(c // r, 4), c),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, x):
+        w = self.gap(x).flatten(1)
+        w = self.fc(w).view(x.shape[0], -1, 1, 1)
+        return x * w
+
+
+# ── Spatial Attention ─────────────────────────────────────────────────────────
+
+class SpatialAttention(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv = nn.Conv2d(2, 1, kernel_size=7, padding=3, bias=False)
+
+    def forward(self, x):
+        avg = x.mean(dim=1, keepdim=True)
+        mx  = x.max(dim=1, keepdim=True).values
+        mask = torch.sigmoid(self.conv(torch.cat([avg, mx], dim=1)))
+        return x * mask
+
+
+# ── Multi-Head Self-Attention (bottleneck) ────────────────────────────────────
+
+class MHSA(nn.Module):
+    """
+    Multi-head self-attention on flattened spatial features,
+    with residual + LayerNorm.
+    """
+    def __init__(self, c, heads=8):
+        super().__init__()
+        assert c % heads == 0
+        self.heads  = heads
+        self.scale  = (c // heads) ** -0.5
+        self.norm   = nn.LayerNorm(c)
+        self.qkv    = nn.Linear(c, c * 3, bias=False)
+        self.proj   = nn.Linear(c, c, bias=False)
+
+    def forward(self, x):
+        B, C, H, W = x.shape
+        x_flat = x.flatten(2).transpose(1, 2)        # B, HW, C
+        res    = x_flat
+        x_flat = self.norm(x_flat)
+
+        qkv = self.qkv(x_flat).chunk(3, dim=-1)
+        Q, K, V = [t.view(B, -1, self.heads, C // self.heads).transpose(1, 2)
+                   for t in qkv]
+
+        attn = (Q @ K.transpose(-2, -1)) * self.scale
+        attn = attn.softmax(dim=-1)
+        out  = (attn @ V).transpose(1, 2).flatten(2)   # B, HW, C
+        out  = self.proj(out) + res
+        return out.transpose(1, 2).view(B, C, H, W)
+
+
+class FFN(nn.Module):
+    """Position-wise Feed-Forward with LayerNorm + residual."""
+    def __init__(self, c, expand=4):
+        super().__init__()
+        self.norm = nn.LayerNorm(c)
+        self.net  = nn.Sequential(
+            nn.Linear(c, c * expand),
+            nn.GELU(),
+            nn.Linear(c * expand, c),
+        )
+
+    def forward(self, x):
+        B, C, H, W = x.shape
+        x_flat = x.flatten(2).transpose(1, 2)    # B, HW, C
+        out    = self.net(self.norm(x_flat)) + x_flat
+        return out.transpose(1, 2).view(B, C, H, W)
+
+
+# ── Decoder block ─────────────────────────────────────────────────────────────
+
+class UpBlock(nn.Module):
+    """Upsample × 2 + skip fusion + conv."""
+    def __init__(self, in_c, skip_c, out_c):
+        super().__init__()
+        self.up   = nn.Sequential(
+            nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False),
+            nn.Conv2d(in_c, out_c, 1, bias=False),
+        )
+        self.fuse = nn.Sequential(
+            ConvBNReLU(out_c + skip_c, out_c),
+            ResBlock(out_c),
+        )
+
+    def forward(self, x, skip):
+        x = self.up(x)
+        # Align spatial size in case of rounding
+        if x.shape[-2:] != skip.shape[-2:]:
+            x = F.interpolate(x, size=skip.shape[-2:],
+                              mode="bilinear", align_corners=False)
+        return self.fuse(torch.cat([x, skip], dim=1))
+
+
+# ── Full RAIN model ───────────────────────────────────────────────────────────
+
+class RAIN(nn.Module):
+    """
+    Inputs:
+        img_low  : (B, 3, H, W)  low-light RGB image
+        r_low    : (B, 3, H, W)  reflectance map  (fine-tuned R_low)
+        i_low    : (B, 1, H, W)  illumination map (I_low)
+
+    Outputs:
+        enhanced : (B, 3, H, W)  enhanced image (tanh → [−1, 1], rescale outside)
+        i_pred   : (B, 1, H, W)  predicted illumination (sigmoid → [0, 1])
+    """
+
+    def __init__(self, base_c=64, mhsa_heads=8):
+        super().__init__()
+        C = base_c
+
+        # ── Encoders ────────────────────────────────────────────────────────
+        self.enc_rgb   = StreamEncoder(3, C)
+        self.enc_refl  = StreamEncoder(3, C)
+        self.enc_illum = StreamEncoder(1, C)
+
+        # ── Cross-modal attention at bottleneck scale (s4 = C*8 channels) ──
+        C8 = C * 8
+        self.ca_rgb_r = CrossModalAttention(C8, C8, C8)    # RGB ← R
+        self.ca_rgb_i = CrossModalAttention(C8, C8, C8)    # RGB ← I
+
+        # ── Fusion: concat(F_rgb, A_rgb_r, A_rgb_i) → 1×1 conv → C8 ───────
+        self.fuse_conv = nn.Sequential(
+            nn.Conv2d(C8 * 3, C8, 1, bias=False),
+            nn.BatchNorm2d(C8),
+            nn.ReLU(inplace=True),
+        )
+
+        # ── Channel attention on fused features ─────────────────────────────
+        self.se = SEBlock(C8)
+
+        # ── Bottleneck: Self-Attention + FFN + Spatial Attention ─────────────
+        self.mhsa    = MHSA(C8, heads=mhsa_heads)
+        self.ffn     = FFN(C8, expand=4)
+        self.sp_attn = SpatialAttention()
+        self.res_bot = nn.Sequential(ResBlock(C8), ResBlock(C8))
+
+        # ── Decoder ──────────────────────────────────────────────────────────
+        # skip channels come from RGB encoder: s3(C4), s2(C2), s1(C)
+        C4, C2 = C * 4, C * 2
+        self.up1 = UpBlock(C8, C4, C4)    # /8 → /4,  fuse with enc_rgb s3
+        self.up2 = UpBlock(C4, C2, C2)    # /4 → /2,  fuse with enc_rgb s2
+        self.up3 = UpBlock(C2, C,  C)     # /2 → /1,  fuse with enc_rgb s1
+        self.up4 = nn.Sequential(         # final refinement at full res
+            ConvBNReLU(C, C // 2),
+            ResBlock(C // 2),
+        )
+
+        # ── Output heads ─────────────────────────────────────────────────────
+        self.head_rgb   = nn.Conv2d(C // 2, 3, 1)   # enhanced image
+        self.head_illum = nn.Conv2d(C // 2, 1, 1)   # aux illumination
+
+    def forward(self, img_low, r_low, i_low):
+        # Encode all three streams
+        r1, r2, r3, r4   = self.enc_rgb(img_low)
+        rr1, rr2, rr3, rr4 = self.enc_refl(r_low)
+        ri1, ri2, ri3, ri4 = self.enc_illum(i_low)
+
+        # Cross-modal attention at deepest scale
+        a_r = self.ca_rgb_r(r4, rr4)
+        a_i = self.ca_rgb_i(r4, ri4)
+
+        # Fuse and apply channel attention
+        fused = self.fuse_conv(torch.cat([r4, a_r, a_i], dim=1))
+        fused = self.se(fused)
+
+        # Bottleneck
+        x = self.mhsa(fused)
+        x = self.ffn(x)
+        x = self.sp_attn(x)
+        x = self.res_bot(x)
+
+        # Decode with skip connections from RGB encoder
+        x = self.up1(x, r3)
+        x = self.up2(x, r2)
+        x = self.up3(x, r1)
+        x = self.up4(x)
+
+        enhanced = torch.tanh(self.head_rgb(x))          # [−1, 1]
+        i_pred   = torch.sigmoid(self.head_illum(x))     # [0,  1]
+        return enhanced, i_pred
+
+
+# ── Quick sanity check ────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model  = RAIN(base_c=64).to(device)
+
+    B, H, W = 2, 256, 256
+    img  = torch.randn(B, 3, H, W).to(device)
+    refl = torch.randn(B, 3, H, W).to(device)
+    illum= torch.randn(B, 1, H, W).to(device)
+
+    enh, i_pred = model(img, refl, illum)
+    print(f"Enhanced : {enh.shape}    min={enh.min():.3f} max={enh.max():.3f}")
+    print(f"I_pred   : {i_pred.shape}  min={i_pred.min():.3f} max={i_pred.max():.3f}")
+
+    total = sum(p.numel() for p in model.parameters())
+    train = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Total params : {total/1e6:.2f} M")
+    print(f"Trainable    : {train/1e6:.2f} M")

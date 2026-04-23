@@ -1,0 +1,96 @@
+"""
+compare_r_final.py
+==================
+Simple side-by-side comparison of:
+  1. R_low   — original reflectance from low-light image
+  2. R_best  — fine-tuned reflectance (best variant)
+  3. R_high  — ground-truth reflectance from the high-light image
+"""
+
+import cv2
+import numpy as np
+import os
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+
+# ── Paths ─────────────────────────────────────────────────────────────────────
+BASE_DIR  = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+decom_dir = os.path.join(BASE_DIR, "results/decomposition")
+best_dir  = os.path.join(BASE_DIR, "results/reflectance_finetuned")
+out_dir   = os.path.join(BASE_DIR, "results/reflectance_final_comparison")
+os.makedirs(out_dir, exist_ok=True)
+
+
+def load(path):
+    img = cv2.imread(path)
+    if img is None:
+        raise FileNotFoundError(f"Missing: {path}")
+    return img.astype(np.float32) / 255.0
+
+
+def to_rgb(arr):
+    u8 = (np.clip(arr, 0, 1) * 255).astype(np.uint8)
+    return cv2.cvtColor(u8, cv2.COLOR_BGR2RGB)
+
+
+img_names = sorted(
+    f for f in os.listdir(decom_dir) if f.endswith("_R_low.png")
+)
+
+for fname in img_names:
+    base = fname.replace("_R_low.png", "")
+
+    R_low  = load(os.path.join(decom_dir, f"{base}_R_low.png"))
+    R_high = load(os.path.join(decom_dir, f"{base}_R_high.png"))
+    R_best = load(os.path.join(best_dir,  f"{base}_R_best.png"))
+
+    R_low_inv  = 1.0 - R_low
+    R_best_inv = 1.0 - R_best
+    R_high_inv = 1.0 - R_high
+    diff_low   = np.abs(R_low  - R_high)
+    diff_best  = np.abs(R_best - R_high)
+
+    rows = [
+        [
+            (to_rgb(R_low),      "R_low\n(original)"),
+            (to_rgb(R_best),     "R_best\n(fine-tuned)"),
+            (to_rgb(R_high),     "R_high\n(ground truth)"),
+        ],
+        [
+            (to_rgb(R_low_inv),  "R_low Inverse"),
+            (to_rgb(R_best_inv), "R_best Inverse"),
+            (to_rgb(R_high_inv), "R_high Inverse"),
+        ],
+        [
+            (to_rgb(diff_low),   "|R_low − R_high|"),
+            (to_rgb(diff_best),  "|R_best − R_high|"),
+            None,
+        ],
+    ]
+
+    fig, axes = plt.subplots(3, 3, figsize=(18, 18))
+    fig.patch.set_facecolor("#111122")
+
+    TKW = dict(color="white", fontsize=12, fontweight="bold", pad=8)
+
+    for r, row in enumerate(rows):
+        for c, panel in enumerate(row):
+            ax = axes[r][c]
+            ax.set_facecolor("#111122")
+            ax.axis("off")
+            for sp in ax.spines.values():
+                sp.set_edgecolor("#333")
+            if panel is None:
+                continue
+            img, title = panel
+            ax.imshow(img)
+            ax.set_title(title, **TKW)
+
+    fig.suptitle(f"{base}.png", color="white", fontsize=15, fontweight="bold", y=1.005)
+    plt.tight_layout()
+    plt.savefig(os.path.join(out_dir, f"{base}_R_compare_final.png"),
+                dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
+    plt.close()
+    print(f"Saved: {base}_R_compare_final.png")
+
+print(f"\nAll comparisons saved to:\n  {out_dir}")

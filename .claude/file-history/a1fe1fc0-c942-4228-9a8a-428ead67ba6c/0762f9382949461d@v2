@@ -1,0 +1,208 @@
+"""
+lol_dataset.py
+==============
+PyTorch Dataset for the LOL (Low-Light) dataset.
+
+Returns a dict with:
+    img_low  : (3, H, W) float32 in [0, 1]   — low-light RGB
+    r_low    : (3, H, W) float32 in [0, 1]   — fine-tuned reflectance R_best
+    i_low    : (1, H, W) float32 in [0, 1]   — illumination map I_low
+    img_high : (3, H, W) float32 in [0, 1]   — ground-truth RGB
+    r_high   : (3, H, W) float32 in [0, 1]   — R_high (reflectance supervision)
+    name     : str                            — image filename stem
+"""
+
+import os
+import random
+import numpy as np
+import cv2
+import torch
+from torch.utils.data import Dataset
+
+
+# ── Retinex decomposition helpers (replicated from fine_tune_reflectance) ─────
+
+def _box_filter(img, r):
+    return cv2.blur(img, (2 * r + 1, 2 * r + 1))
+
+
+def illum_guided(img, r=16, eps=1e-3):
+    """Self-guided filter illumination estimation."""
+    I     = np.max(img, axis=2).astype(np.float32)
+    guide = cv2.cvtColor((img * 255).astype(np.uint8),
+                          cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
+    mean_I  = _box_filter(I, r)
+    mean_g  = _box_filter(guide, r)
+    mean_Ig = _box_filter(I * guide, r)
+    mean_gg = _box_filter(guide * guide, r)
+    cov_Ig  = mean_Ig - mean_I * mean_g
+    var_g   = mean_gg - mean_g * mean_g
+    a       = cov_Ig / (var_g + eps)
+    b       = mean_I - a * mean_g
+    I_out   = _box_filter(a, r) * guide + _box_filter(b, r)
+    return np.clip(I_out, 1e-4, 1.0)
+
+
+def illum_bilateral(img, ksize=15):
+    I    = np.max(img, axis=2)
+    I_u8 = (I * 255).astype(np.uint8)
+    I_s  = cv2.bilateralFilter(I_u8, d=ksize, sigmaColor=75, sigmaSpace=75)
+    return I_s.astype(np.float32) / 255.0
+
+
+def refine_nlm(R, h=6, hColor=6, tws=7, sws=21):
+    R_u8  = (R * 255).astype(np.uint8)
+    R_den = cv2.fastNlMeansDenoisingColored(R_u8, None, h, hColor, tws, sws)
+    return R_den.astype(np.float32) / 255.0
+
+
+def decompose(img, use_guided=False):
+    """
+    Returns R (3-ch), I (1-ch) for a float32 BGR image in [0,1].
+    Uses bilateral illumination + NL-Means reflectance denoising.
+    """
+    if use_guided:
+        I = illum_guided(img)
+    else:
+        I = illum_bilateral(img)
+    R = np.clip(img / (I[:, :, np.newaxis] + 1e-6), 0, 1)
+    R = refine_nlm(R)
+    return R, I   # R: HxWx3 float32, I: HxW float32
+
+
+# ── Dataset ───────────────────────────────────────────────────────────────────
+
+class LOLDataset(Dataset):
+    """
+    Parameters
+    ----------
+    low_dir      : folder with low-light images
+    high_dir     : folder with high-light ground truth images
+    best_dir     : folder with pre-computed R_best  (from fine_tune_reflectance.py)
+                   If None, R_low is computed on-the-fly.
+    patch_size   : random crop size during training (None = no crop)
+    augment      : random flip + rotation augmentation
+    precompute_R : if True and best_dir is None, compute R on-the-fly each call
+    """
+
+    def __init__(self, low_dir, high_dir,
+                 best_dir=None,
+                 patch_size=256,
+                 augment=True,
+                 precompute_R=True):
+        self.low_dir     = low_dir
+        self.high_dir    = high_dir
+        self.best_dir    = best_dir
+        self.patch_size  = patch_size
+        self.augment     = augment
+        self.precompute_R = precompute_R
+
+        self.names = sorted(
+            f for f in os.listdir(low_dir) if f.endswith(('.png', '.jpg'))
+        )
+
+    def __len__(self):
+        return len(self.names)
+
+    def _load(self, path):
+        img = cv2.imread(path)
+        if img is None:
+            raise FileNotFoundError(path)
+        return img.astype(np.float32) / 255.0   # BGR float32
+
+    def _augment(self, *imgs):
+        """Apply the same random flip/rotation to all images."""
+        mode = random.randint(0, 7)
+        out = []
+        for img in imgs:
+            if mode == 1:  img = np.flipud(img)
+            elif mode == 2: img = np.fliplr(img)
+            elif mode == 3: img = np.rot90(img, 1)
+            elif mode == 4: img = np.rot90(img, 2)
+            elif mode == 5: img = np.rot90(img, 3)
+            elif mode == 6: img = np.flipud(np.rot90(img, 1))
+            elif mode == 7: img = np.fliplr(np.rot90(img, 1))
+            out.append(np.ascontiguousarray(img))
+        return out
+
+    def _crop(self, *imgs):
+        """Random crop to patch_size × patch_size."""
+        H, W = imgs[0].shape[:2]
+        ps   = self.patch_size
+        if H <= ps or W <= ps:
+            imgs = [cv2.resize(img, (max(W, ps), max(H, ps)),
+                               interpolation=cv2.INTER_LINEAR) for img in imgs]
+            H, W = imgs[0].shape[:2]
+        x = random.randint(0, H - ps)
+        y = random.randint(0, W - ps)
+        return [img[x:x+ps, y:y+ps] for img in imgs]
+
+    def _to_tensor(self, img):
+        """HxWxC numpy float32 → CxHxW torch tensor."""
+        return torch.from_numpy(img.transpose(2, 0, 1)).float()
+
+    def __getitem__(self, idx):
+        name  = self.names[idx]
+        base  = os.path.splitext(name)[0]
+
+        low   = self._load(os.path.join(self.low_dir,  name))
+        high  = self._load(os.path.join(self.high_dir, name))
+
+        # R_low: use pre-computed R_best if available, else compute on-the-fly
+        if self.best_dir is not None:
+            r_low_path = os.path.join(self.best_dir, f"{base}_R_best.png")
+            if os.path.exists(r_low_path):
+                r_low = self._load(r_low_path)
+            else:
+                r_low, _ = decompose(low)
+        elif self.precompute_R:
+            r_low, _ = decompose(low)
+        else:
+            r_low = low.copy()
+
+        # Illumination map for low-light image
+        i_low = illum_bilateral(low)[:, :, np.newaxis]  # HxWx1
+
+        # R_high for auxiliary supervision
+        r_high, _ = decompose(high)
+
+        # Spatial consistency: same crop for all
+        if self.patch_size is not None:
+            low, high, r_low, r_high, i_low = self._crop(
+                low, high, r_low, r_high, i_low
+            )
+
+        if self.augment:
+            low, high, r_low, r_high, i_low = self._augment(
+                low, high, r_low, r_high, i_low
+            )
+
+        return {
+            "img_low":  self._to_tensor(low),
+            "r_low":    self._to_tensor(r_low),
+            "i_low":    self._to_tensor(i_low),
+            "img_high": self._to_tensor(high),
+            "r_high":   self._to_tensor(r_high),
+            "name":     base,
+        }
+
+
+# ── Quick check ───────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    import os
+    BASE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+    ds = LOLDataset(
+        low_dir   = os.path.join(BASE, "datasets/LOL_dataset/our485/low"),
+        high_dir  = os.path.join(BASE, "datasets/LOL_dataset/our485/high"),
+        best_dir  = None,
+        patch_size= 256,
+        augment   = True,
+    )
+    sample = ds[0]
+    for k, v in sample.items():
+        if isinstance(v, torch.Tensor):
+            print(f"  {k}: {v.shape}  min={v.min():.3f} max={v.max():.3f}")
+        else:
+            print(f"  {k}: {v}")

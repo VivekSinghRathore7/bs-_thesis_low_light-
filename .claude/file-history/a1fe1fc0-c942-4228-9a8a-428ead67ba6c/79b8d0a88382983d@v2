@@ -1,0 +1,350 @@
+"""
+architecture_diagram.py
+=======================
+Generates the model architecture diagram for:
+  Retinex-Guided Attention-Based Multimodal Image Enhancement Network (RAIN)
+
+Flow (left → right):
+  Inputs → Multi-modal Encoders → Cross-Modal Attention Fusion
+         → Self-Attention Bottleneck → Multi-scale Decoder → Output
+"""
+
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+from matplotlib.patches import FancyBboxPatch, FancyArrowPatch
+import numpy as np
+
+# ── Canvas ────────────────────────────────────────────────────────────────────
+fig, ax = plt.subplots(figsize=(26, 14))
+fig.patch.set_facecolor("#0d1117")
+ax.set_facecolor("#0d1117")
+ax.set_xlim(0, 26)
+ax.set_ylim(0, 14)
+ax.axis("off")
+
+# ── Colour palette ────────────────────────────────────────────────────────────
+C = {
+    "rgb":      "#2d7dd2",   # blue  — RGB stream
+    "refl":     "#3bb273",   # green — Reflectance stream
+    "illum":    "#e88c30",   # amber — Illumination stream
+    "attn":     "#9b59b6",   # purple — Cross-modal attention
+    "self_attn":"#c0392b",   # red    — Self-attention
+    "fuse":     "#16a085",   # teal   — Feature fusion
+    "decode":   "#1a6b8a",   # dark-blue — Decoder
+    "output":   "#f39c12",   # gold   — Output
+    "skip":     "#555577",   # grey   — Skip connections
+    "bg_panel": "#161b22",   # panel background
+    "text":     "#e6edf3",   # primary text
+    "subtext":  "#8b949e",   # secondary text
+    "border":   "#30363d",   # border
+}
+
+
+# ── Drawing helpers ───────────────────────────────────────────────────────────
+
+def box(x, y, w, h, color, alpha=0.85, radius=0.18, lw=1.5, zorder=3):
+    """Draw a rounded rectangle."""
+    rect = FancyBboxPatch(
+        (x - w/2, y - h/2), w, h,
+        boxstyle=f"round,pad=0.0,rounding_size={radius}",
+        facecolor=color, edgecolor=C["text"], linewidth=lw,
+        alpha=alpha, zorder=zorder
+    )
+    ax.add_patch(rect)
+    return rect
+
+
+def label(x, y, txt, fs=8.5, color=C["text"], bold=False, va="center", ha="center", zorder=5):
+    ax.text(x, y, txt, fontsize=fs, color=color,
+            fontweight="bold" if bold else "normal",
+            va=va, ha=ha, zorder=zorder,
+            fontfamily="DejaVu Sans")
+
+
+def arrow(x0, y0, x1, y1, color="#aaaaaa", lw=1.4,
+          style="->", zorder=2, alpha=0.85):
+    ax.annotate("", xy=(x1, y1), xytext=(x0, y0),
+                arrowprops=dict(
+                    arrowstyle=style,
+                    color=color, lw=lw,
+                    connectionstyle="arc3,rad=0.0"
+                ), zorder=zorder, alpha=alpha)
+
+
+def curved_arrow(x0, y0, x1, y1, color="#aaaaaa", lw=1.3, rad=0.25, zorder=2):
+    ax.annotate("", xy=(x1, y1), xytext=(x0, y0),
+                arrowprops=dict(
+                    arrowstyle="->",
+                    color=color, lw=lw,
+                    connectionstyle=f"arc3,rad={rad}"
+                ), zorder=zorder)
+
+
+def section_bg(x, y, w, h, color=C["bg_panel"], zorder=1):
+    rect = FancyBboxPatch(
+        (x, y), w, h,
+        boxstyle="round,pad=0.0,rounding_size=0.3",
+        facecolor=color, edgecolor=C["border"],
+        linewidth=1.0, alpha=0.6, zorder=zorder
+    )
+    ax.add_patch(rect)
+
+
+def divider(x, y0=0.4, y1=13.6, color=C["border"], lw=1.0):
+    ax.plot([x, x], [y0, y1], color=color, lw=lw,
+            linestyle="--", alpha=0.5, zorder=1)
+
+
+# ── Section backgrounds ───────────────────────────────────────────────────────
+section_bg(0.15, 0.3,  3.0, 13.3)   # Input
+section_bg(3.35, 0.3,  4.4, 13.3)   # Encoders
+section_bg(7.85, 0.3,  5.4, 13.3)   # Cross-Modal Attention
+section_bg(13.35, 0.3, 3.2, 13.3)   # Bottleneck
+section_bg(16.65, 0.3, 5.2, 13.3)   # Decoder
+section_bg(21.95, 0.3, 3.7, 13.3)   # Output
+
+# Section headers
+for x, txt, col in [
+    (1.65,  "INPUT",            C["text"]),
+    (5.55,  "ENCODER",          C["text"]),
+    (10.55, "CROSS-MODAL\nATTENTION",  C["text"]),
+    (14.95, "BOTTLENECK",       C["text"]),
+    (19.25, "DECODER",          C["text"]),
+    (23.85, "OUTPUT",           C["text"]),
+]:
+    label(x, 13.55, txt, fs=8, color=C["subtext"], bold=True)
+
+# ── Y positions for 3 streams ─────────────────────────────────────────────────
+Y = {"rgb": 10.5, "refl": 7.0, "illum": 3.5}
+stream_colors = {"rgb": C["rgb"], "refl": C["refl"], "illum": C["illum"]}
+
+# ── 1. INPUT ──────────────────────────────────────────────────────────────────
+input_specs = [
+    ("rgb",   "Low-light RGB",     "H × W × 3",   C["rgb"]),
+    ("refl",  "Reflectance  R_low","H × W × 3",   C["refl"]),
+    ("illum", "Illumination I_low","H × W × 1",   C["illum"]),
+]
+for key, title, shape, col in input_specs:
+    y = Y[key]
+    box(1.65, y, 2.6, 1.2, col, alpha=0.25, radius=0.15)
+    box(1.65, y, 2.6, 1.2, col, alpha=0.0,  radius=0.15, lw=2.0)
+    label(1.65, y + 0.18, title, fs=8.5, bold=True, color=col)
+    label(1.65, y - 0.22, shape, fs=7.5, color=C["subtext"])
+
+# ── 2. ENCODER (4-scale CNN per stream) ───────────────────────────────────────
+enc_x = 5.55
+enc_scales = [
+    ("Conv 3×3\nBN + ReLU", 0.9),
+    ("Scale 1\n×1 (C=64)",  0.5),
+    ("Scale 2\n×2 (C=128)", 0.0),
+    ("Scale 3\n×4 (C=256)", -0.5),
+    ("Scale 4\n×8 (C=512)", -1.0),
+]
+
+for key, col in stream_colors.items():
+    y = Y[key]
+    # Encoder block
+    box(enc_x, y, 2.6, 2.8, col, alpha=0.18, radius=0.2, lw=1.8)
+    label(enc_x, y + 1.05, "CNN Encoder", fs=8.5, bold=True, color=col)
+    for i, (txt, dy) in enumerate(enc_scales):
+        iy = y + dy - 0.1
+        box(enc_x, iy, 2.2, 0.38, col, alpha=0.35, radius=0.1, lw=1.0)
+        label(enc_x, iy, txt, fs=6.5, color=C["text"])
+    # Arrow input → encoder
+    arrow(2.96, Y[key], enc_x - 1.3, Y[key], color=col, lw=1.6)
+
+# ── 3. CROSS-MODAL ATTENTION ──────────────────────────────────────────────────
+attn_x = 10.55
+
+# Attention block per pair
+for key, col in stream_colors.items():
+    y = Y[key]
+    # Arrow encoder → attention
+    arrow(enc_x + 1.3, y, attn_x - 1.5, y, color=col, lw=1.6)
+
+# Cross-modal attention: RGB ↔ R
+y_ca1 = (Y["rgb"] + Y["refl"]) / 2   # 8.75
+box(attn_x, y_ca1, 2.8, 2.5, C["attn"], alpha=0.22, radius=0.2, lw=1.8)
+label(attn_x, y_ca1 + 0.80, "Cross-Attn", fs=8.5, bold=True, color=C["attn"])
+label(attn_x, y_ca1 + 0.30, "Q  ← RGB features", fs=7, color=C["rgb"])
+label(attn_x, y_ca1 - 0.05, "K,V ← R features",  fs=7, color=C["refl"])
+label(attn_x, y_ca1 - 0.40, "Softmax(QKᵀ/√d)V",  fs=7, color=C["subtext"])
+label(attn_x, y_ca1 - 0.75, "A_rgb_r",            fs=7.5, color=C["text"], bold=True)
+
+# Curved arrows into first cross-attn
+curved_arrow(enc_x + 1.3, Y["rgb"],  attn_x - 1.4, y_ca1 + 0.5, color=C["rgb"],  lw=1.4, rad=-0.2)
+curved_arrow(enc_x + 1.3, Y["refl"], attn_x - 1.4, y_ca1 - 0.5, color=C["refl"], lw=1.4, rad=0.2)
+
+# Cross-modal attention: RGB ↔ I
+y_ca2 = (Y["refl"] + Y["illum"]) / 2   # 5.25
+box(attn_x, y_ca2, 2.8, 2.5, C["illum"], alpha=0.18, radius=0.2, lw=1.8)
+label(attn_x, y_ca2 + 0.80, "Cross-Attn", fs=8.5, bold=True, color=C["illum"])
+label(attn_x, y_ca2 + 0.30, "Q  ← RGB features", fs=7, color=C["rgb"])
+label(attn_x, y_ca2 - 0.05, "K,V ← I features",  fs=7, color=C["illum"])
+label(attn_x, y_ca2 - 0.40, "Softmax(QKᵀ/√d)V",  fs=7, color=C["subtext"])
+label(attn_x, y_ca2 - 0.75, "A_rgb_i",            fs=7.5, color=C["text"], bold=True)
+
+curved_arrow(enc_x + 1.3, Y["rgb"],   attn_x - 1.4, y_ca2 + 0.7, color=C["rgb"],   lw=1.4, rad=0.3)
+curved_arrow(enc_x + 1.3, Y["illum"], attn_x - 1.4, y_ca2 - 0.5, color=C["illum"], lw=1.4, rad=-0.2)
+
+# Fusion block
+y_fuse = 1.8
+box(attn_x, y_fuse, 2.8, 1.5, C["fuse"], alpha=0.30, radius=0.2, lw=1.8)
+label(attn_x, y_fuse + 0.35, "Feature Fusion", fs=8.5, bold=True, color=C["fuse"])
+label(attn_x, y_fuse - 0.05, "Concat(F_rgb, A_rgb_r, A_rgb_i)", fs=6.5, color=C["text"])
+label(attn_x, y_fuse - 0.38, "1×1 Conv  →  C=512", fs=7, color=C["subtext"])
+
+# Arrows from attention blocks down to fusion
+arrow(attn_x, y_ca1 - 1.25, attn_x, y_fuse + 0.75,
+      color=C["attn"], lw=1.5)
+arrow(attn_x, y_ca2 - 1.25, attn_x, y_fuse + 0.75,
+      color=C["illum"], lw=1.5)
+
+# Channel attention (SE)
+y_se = 11.9
+box(attn_x, y_se, 2.8, 1.5, C["attn"], alpha=0.30, radius=0.2, lw=1.8)
+label(attn_x, y_se + 0.35, "Channel Attention", fs=8.5, bold=True, color=C["attn"])
+label(attn_x, y_se - 0.02, "SE Block", fs=8, color=C["text"])
+label(attn_x, y_se - 0.38, "GAP → FC → Sigmoid", fs=7, color=C["subtext"])
+curved_arrow(attn_x + 1.4, y_ca1 + 0.9, attn_x + 1.4, y_se - 0.75,
+             color=C["attn"], lw=1.3, rad=-0.4)
+arrow(attn_x, y_se - 0.75, attn_x, y_ca1 + 1.25, color=C["attn"], lw=1.3)
+
+# ── 4. BOTTLENECK ─────────────────────────────────────────────────────────────
+btn_x = 14.95
+
+# Arrow fusion → bottleneck
+arrow(attn_x + 1.4, y_fuse, btn_x - 1.6, 7.0, color=C["fuse"], lw=1.6)
+
+box(btn_x, 9.2, 2.8, 1.5, C["self_attn"], alpha=0.28, radius=0.2, lw=1.8)
+label(btn_x, 9.2 + 0.35, "Self-Attention", fs=8.5, bold=True, color=C["self_attn"])
+label(btn_x, 9.2 - 0.02, "Multi-Head (heads=8)", fs=7.5, color=C["text"])
+label(btn_x, 9.2 - 0.38, "Global context modelling", fs=7, color=C["subtext"])
+
+box(btn_x, 7.0, 2.8, 1.5, C["fuse"], alpha=0.28, radius=0.2, lw=1.8)
+label(btn_x, 7.0 + 0.35, "Feed-Forward", fs=8.5, bold=True, color=C["fuse"])
+label(btn_x, 7.0 - 0.02, "LayerNorm + MLP", fs=7.5, color=C["text"])
+label(btn_x, 7.0 - 0.38, "C=512 → C=2048 → C=512", fs=7, color=C["subtext"])
+
+box(btn_x, 4.8, 2.8, 1.5, C["self_attn"], alpha=0.22, radius=0.2, lw=1.8)
+label(btn_x, 4.8 + 0.35, "Spatial Attention", fs=8.5, bold=True, color=C["self_attn"])
+label(btn_x, 4.8 - 0.02, "Conv 7×7 → Sigmoid", fs=7.5, color=C["text"])
+label(btn_x, 4.8 - 0.38, "Foreground emphasis", fs=7, color=C["subtext"])
+
+arrow(btn_x, 9.2 - 0.75, btn_x, 7.0 + 0.75, color=C["self_attn"], lw=1.5)
+arrow(btn_x, 7.0 - 0.75, btn_x, 4.8 + 0.75, color=C["fuse"],      lw=1.5)
+
+box(btn_x, 2.6, 2.8, 1.4, C["decode"], alpha=0.28, radius=0.2, lw=1.8)
+label(btn_x, 2.6 + 0.28, "Residual Block ×2", fs=8.5, bold=True, color=C["decode"])
+label(btn_x, 2.6 - 0.28, "3×3 Conv + BN + ReLU", fs=7, color=C["subtext"])
+arrow(btn_x, 4.8 - 0.75, btn_x, 2.6 + 0.7, color=C["self_attn"], lw=1.5)
+
+# ── 5. DECODER ────────────────────────────────────────────────────────────────
+dec_x = 19.25
+
+arrow(btn_x + 1.4, 2.6, dec_x - 1.6, 2.6, color=C["decode"], lw=1.6)
+
+dec_stages = [
+    (11.8, "Up-Block 1",    "×8→×4  C=512→256", "Bilinear + Conv"),
+    (9.4,  "Up-Block 2",    "×4→×2  C=256→128", "Pixel Shuffle"),
+    (7.0,  "Up-Block 3",    "×2→×1  C=128→64",  "Bilinear + Conv"),
+    (4.6,  "Up-Block 4",    "×1      C=64→32",  "3×3 Conv + BN"),
+    (2.3,  "Output Conv",   "C=32→3",            "1×1 Conv + Tanh"),
+]
+
+for i, (y, title, scale, detail) in enumerate(dec_stages):
+    col = C["decode"] if i < 4 else C["output"]
+    box(dec_x, y, 2.8, 1.55, col, alpha=0.28, radius=0.18, lw=1.8)
+    label(dec_x, y + 0.42, title,  fs=8.5, bold=True, color=col)
+    label(dec_x, y + 0.02, scale,  fs=7.5, color=C["text"])
+    label(dec_x, y - 0.35, detail, fs=7,   color=C["subtext"])
+    if i > 0:
+        prev_y = dec_stages[i-1][0]
+        arrow(dec_x, prev_y - 0.78, dec_x, y + 0.78, color=col, lw=1.5)
+
+# Skip connection arrows (encoder → decoder)
+skip_pairs = [
+    (Y["rgb"],  dec_stages[0][0], C["rgb"]),
+    (Y["refl"], dec_stages[1][0], C["refl"]),
+    (Y["illum"],dec_stages[2][0], C["illum"]),
+]
+for y_src, y_dst, col in skip_pairs:
+    # from encoder output
+    ax.annotate("",
+        xy=(dec_x - 1.4, y_dst),
+        xytext=(enc_x + 1.3, y_src),
+        arrowprops=dict(
+            arrowstyle="->", color=col, lw=1.1,
+            linestyle="dashed",
+            connectionstyle="arc3,rad=0.0"
+        ), zorder=2, alpha=0.55)
+    # small skip label
+    label((enc_x + 1.3 + dec_x - 1.4)/2,
+          (y_src + y_dst)/2 + 0.25,
+          "skip", fs=6, color=col, bold=False)
+
+# Arrow bottleneck → decoder top
+curved_arrow(btn_x + 1.4, 2.6, dec_x - 1.4, dec_stages[0][0],
+             color=C["decode"], lw=1.6, rad=-0.35)
+
+# ── 6. OUTPUT ─────────────────────────────────────────────────────────────────
+out_x = 23.85
+
+arrow(dec_x + 1.4, dec_stages[-1][0], out_x - 1.55, dec_stages[-1][0],
+      color=C["output"], lw=1.8)
+
+box(out_x, 4.5, 3.0, 2.2, C["output"], alpha=0.28, radius=0.2, lw=2.2)
+label(out_x, 4.5 + 0.65, "Enhanced Image", fs=9, bold=True, color=C["output"])
+label(out_x, 4.5 + 0.15, "H × W × 3",     fs=8,  color=C["text"])
+label(out_x, 4.5 - 0.30, "Clean, bright,", fs=7,  color=C["subtext"])
+label(out_x, 4.5 - 0.65, "colour-accurate",fs=7,  color=C["subtext"])
+
+box(out_x, 8.0, 3.0, 1.8, C["illum"], alpha=0.22, radius=0.2, lw=1.6)
+label(out_x, 8.0 + 0.45, "I_predicted",    fs=8.5, bold=True, color=C["illum"])
+label(out_x, 8.0 - 0.0,  "H × W × 1",     fs=7.5, color=C["text"])
+label(out_x, 8.0 - 0.45, "Auxiliary output\n(illumination supervision)", fs=6.5, color=C["subtext"])
+
+curved_arrow(dec_x + 1.4, dec_stages[2][0], out_x - 1.5, 8.0,
+             color=C["illum"], lw=1.3, rad=0.3)
+
+# ── LOSS FUNCTIONS (bottom annotation) ───────────────────────────────────────
+loss_y = 0.85
+box(13.0, loss_y, 18.0, 0.85, "#1f2937", alpha=0.9, radius=0.15, lw=1.2)
+label(13.0, loss_y + 0.05,
+      "Loss  =  λ₁·L1(Enhanced, GT)  +  λ₂·SSIM(Enhanced, GT)  +  "
+      "λ₃·Perceptual(VGG)  +  λ₄·L1(I_pred, I_GT)",
+      fs=7.5, color=C["subtext"])
+
+# ── Legend ────────────────────────────────────────────────────────────────────
+legend_x, legend_y = 0.25, 13.1
+legend_items = [
+    (C["rgb"],       "RGB Stream"),
+    (C["refl"],      "Reflectance Stream"),
+    (C["illum"],     "Illumination Stream"),
+    (C["attn"],      "Cross-Modal Attention"),
+    (C["self_attn"], "Self / Spatial Attention"),
+    (C["fuse"],      "Feature Fusion / FFN"),
+    (C["decode"],    "Decoder"),
+    (C["output"],    "Output"),
+]
+for i, (col, lbl) in enumerate(legend_items):
+    bx = legend_x + (i % 4) * 3.1
+    by = legend_y - (i // 4) * 0.55
+    box(bx + 0.12, by, 0.28, 0.28, col, alpha=0.8, radius=0.05, lw=1.0)
+    label(bx + 0.55, by, lbl, fs=7, color=C["subtext"], ha="left")
+
+# ── Title ─────────────────────────────────────────────────────────────────────
+label(13.0, 13.82,
+      "RAIN  —  Retinex-Guided Attention-Based Multimodal Image Enhancement Network",
+      fs=13, bold=True, color=C["text"])
+
+# ── Save ──────────────────────────────────────────────────────────────────────
+import os
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+out_path = os.path.join(BASE_DIR, "results", "RAIN_architecture.png")
+os.makedirs(os.path.dirname(out_path), exist_ok=True)
+
+plt.savefig(out_path, dpi=180, bbox_inches="tight",
+            facecolor=fig.get_facecolor())
+plt.close()
+print(f"Saved: {out_path}")
