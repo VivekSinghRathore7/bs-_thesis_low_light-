@@ -1,6 +1,5 @@
 """
-retinex_utils.py
-Retinex decomposition and classical illumination enhancement methods.
+Retinex and classical processing logic.
 """
 
 import cv2

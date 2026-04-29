@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RetinexRestormer — 7-Channel Input Schematic</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0f1117;
+    --card: #181b24;
+    --border: #2a2e3a;
+    --accent: #6c5ce7;
+    --cyan: #00cec9;
+    --green: #00b894;
+    --orange: #e17055;
+    --pink: #fd79a8;
+    --yellow: #fdcb6e;
+    --blue: #74b9ff;
+    --text: #e4e6eb;
+    --muted: #8b90a0;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: 'Inter', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    padding: 40px 20px;
+    overflow-x: auto;
+  }
+  h1 {
+    text-align: center;
+    font-size: 1.8rem;
+    font-weight: 800;
+    margin-bottom: 8px;
+    background: linear-gradient(135deg, var(--cyan), var(--accent));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .subtitle {
+    text-align: center;
+    color: var(--muted);
+    font-size: 0.95rem;
+    margin-bottom: 40px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  /* ── SVG canvas ─────────────────────────────── */
+  .canvas-wrap {
+    display: flex;
+    justify-content: center;
+  }
+  svg {
+    font-family: 'Inter', sans-serif;
+  }
+  svg text {
+    fill: var(--text);
+  }
+  svg .label-main  { font-weight: 700; font-size: 14px; }
+  svg .label-sub   { font-weight: 400; font-size: 11px; fill: var(--muted); }
+  svg .label-tiny  { font-weight: 500; font-size: 10px; fill: var(--muted); font-family: 'JetBrains Mono', monospace; }
+  svg .label-eq    { font-weight: 500; font-size: 12px; fill: var(--yellow); font-family: 'JetBrains Mono', monospace; }
+  svg .label-ch    { font-weight: 700; font-size: 11px; font-family: 'JetBrains Mono', monospace; }
+
+  /* Arrow marker */
+  .arrow-head { fill: var(--muted); }
+
+  /* Boxes */
+  .box-input   { fill: #1e3a5f; stroke: var(--blue);   stroke-width: 2; rx: 10; }
+  .box-step    { fill: #1a2e1a; stroke: var(--green);  stroke-width: 2; rx: 10; }
+  .box-reflect { fill: #3b1a3b; stroke: var(--pink);   stroke-width: 2; rx: 10; }
+  .box-illum   { fill: #3b2e1a; stroke: var(--yellow); stroke-width: 2; rx: 10; }
+  .box-concat  { fill: #2a1e4a; stroke: var(--accent); stroke-width: 2.5; rx: 12; }
+  .box-model   { fill: #1a1a2e; stroke: var(--cyan);   stroke-width: 2.5; rx: 14; }
+  .box-output  { fill: #1e3a2a; stroke: var(--green);  stroke-width: 2.5; rx: 12; }
+
+  /* Arrows */
+  .arrow { stroke: var(--muted); stroke-width: 1.8; fill: none; }
+  .arrow-blue   { stroke: var(--blue);   stroke-width: 2; fill: none; }
+  .arrow-pink   { stroke: var(--pink);   stroke-width: 2; fill: none; }
+  .arrow-yellow { stroke: var(--yellow); stroke-width: 2; fill: none; }
+  .arrow-accent { stroke: var(--accent); stroke-width: 2.5; fill: none; }
+  .arrow-cyan   { stroke: var(--cyan);   stroke-width: 2.5; fill: none; }
+
+  /* Dashed region */
+  .region-dash { fill: none; stroke: var(--border); stroke-width: 1.5; stroke-dasharray: 6,4; rx: 16; }
+
+  /* Legend at bottom */
+  .legend {
+    max-width: 1100px;
+    margin: 30px auto 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 16px;
+  }
+  .legend-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px 20px;
+  }
+  .legend-card h3 {
+    font-size: 0.85rem;
+    font-weight: 700;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .legend-card h3 .dot {
+    width: 10px; height: 10px; border-radius: 50%; display: inline-block;
+  }
+  .legend-card p, .legend-card code {
+    font-size: 0.82rem;
+    color: var(--muted);
+    line-height: 1.6;
+  }
+  .legend-card code {
+    font-family: 'JetBrains Mono', monospace;
+    background: rgba(255,255,255,0.06);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.78rem;
+  }
+</style>
+</head>
+<body>
+
+<h1>RetinexRestormer — 7-Channel Input Construction</h1>
+<p class="subtitle">I_low (3ch) ‖ R_low (3ch) ‖ I_tv (1ch) → Restormer U-Net → Enhanced (3ch)</p>
+
+<div class="canvas-wrap">
+<svg width="1100" height="780" viewBox="0 0 1100 780">
+  <defs>
+    <marker id="ah" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" class="arrow-head"/>
+    </marker>
+    <marker id="ah-blue" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#74b9ff"/>
+    </marker>
+    <marker id="ah-pink" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#fd79a8"/>
+    </marker>
+    <marker id="ah-yellow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#fdcb6e"/>
+    </marker>
+    <marker id="ah-accent" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#6c5ce7"/>
+    </marker>
+    <marker id="ah-cyan" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#00cec9"/>
+    </marker>
+  </defs>
+
+  <!-- ═══════════════════════════════════════════════
+       SECTION 1: Input Image
+       ═══════════════════════════════════════════════ -->
+  <rect x="40" y="30" width="200" height="80" class="box-input"/>
+  <text x="140" y="60" text-anchor="middle" class="label-main">🌙 Low-Light Image</text>
+  <text x="140" y="78" text-anchor="middle" class="label-sub">I_low  (H × W × 3, BGR)</text>
+
+  <!-- Arrow down from Input to fork -->
+  <line x1="140" y1="110" x2="140" y2="155" class="arrow-blue" marker-end="url(#ah-blue)"/>
+
+  <!-- ═══════════════════════════════════════════════
+       SECTION 2: Retinex Decomposition (dashed region)
+       ═══════════════════════════════════════════════ -->
+  <rect x="20" y="160" width="660" height="370" class="region-dash"/>
+  <text x="350" y="185" text-anchor="middle" font-size="13" font-weight="700" fill="#8b90a0">
+    Retinex Decomposition  (retinex_utils.decompose_retinex)
+  </text>
+
+  <!-- ── Step 1: Max Channel ── -->
+  <rect x="60" y="205" width="250" height="65" class="box-step"/>
+  <text x="185" y="228" text-anchor="middle" class="label-main">① Max-Channel Extraction</text>
+  <text x="185" y="248" text-anchor="middle" class="label-eq">I = max(B, G, R)  per pixel</text>
+  <text x="185" y="262" text-anchor="middle" class="label-tiny">→ single-channel illumination map</text>
+
+  <!-- Arrow: Input fork to Step 1 -->
+  <line x1="140" y1="155" x2="185" y2="205" class="arrow-blue" marker-end="url(#ah-blue)"/>
+
+  <!-- ── Step 2: Bilateral Filter on I ── -->
+  <rect x="60" y="290" width="250" height="65" class="box-step"/>
+  <text x="185" y="313" text-anchor="middle" class="label-main">② Bilateral Smoothing</text>
+  <text x="185" y="333" text-anchor="middle" class="label-eq">I_s = bilateralFilter(I, d=15)</text>
+  <text x="185" y="347" text-anchor="middle" class="label-tiny">σ_color=75, σ_space=75</text>
+
+  <line x1="185" y1="270" x2="185" y2="290" class="arrow-yellow" marker-end="url(#ah-yellow)"/>
+
+  <!-- ── Step 3: Reflectance = I_low / I_s ── -->
+  <rect x="380" y="205" width="270" height="65" class="box-step"/>
+  <text x="515" y="228" text-anchor="middle" class="label-main">③ Reflectance Computation</text>
+  <text x="515" y="248" text-anchor="middle" class="label-eq">R = I_low / (I_s + ε)</text>
+  <text x="515" y="262" text-anchor="middle" class="label-tiny">R = clip(R, 0, 1)  →  3-channel</text>
+
+  <!-- Arrow: Input fork to Step 3 (I_low used in division) -->
+  <path d="M 140,155 Q 140,180 350,200 Q 400,198 380,225" class="arrow-blue" fill="none" marker-end="url(#ah-blue)"/>
+  <!-- Arrow: Step 2 (I_s) to Step 3 -->
+  <path d="M 310,322 Q 350,322 380,260" class="arrow-yellow" fill="none" marker-end="url(#ah-yellow)"/>
+  <text x="348" y="290" class="label-tiny" text-anchor="middle">I_s</text>
+
+  <!-- ── Step 4: Bilateral Filter on R ── -->
+  <rect x="380" y="290" width="270" height="65" class="box-step"/>
+  <text x="515" y="313" text-anchor="middle" class="label-main">④ Reflectance Denoising</text>
+  <text x="515" y="333" text-anchor="middle" class="label-eq">R_low = bilateralFilter(R, d=9)</text>
+  <text x="515" y="347" text-anchor="middle" class="label-tiny">σ_color=25, σ_space=10</text>
+
+  <line x1="515" y1="270" x2="515" y2="290" class="arrow-pink" marker-end="url(#ah-pink)"/>
+
+  <!-- ═══ OUTPUT BOXES from decomposition ═══ -->
+
+  <!-- Illumination output -->
+  <rect x="60" y="395" width="250" height="70" class="box-illum"/>
+  <text x="185" y="420" text-anchor="middle" class="label-main" fill="#fdcb6e">I_tv (Illumination)</text>
+  <text x="185" y="440" text-anchor="middle" class="label-ch" fill="#fdcb6e">1 channel</text>
+  <text x="185" y="456" text-anchor="middle" class="label-tiny">Smoothed illumination map</text>
+
+  <line x1="185" y1="355" x2="185" y2="395" class="arrow-yellow" marker-end="url(#ah-yellow)"/>
+
+  <!-- Reflectance output -->
+  <rect x="380" y="395" width="270" height="70" class="box-reflect"/>
+  <text x="515" y="420" text-anchor="middle" class="label-main" fill="#fd79a8">R_low (Reflectance)</text>
+  <text x="515" y="440" text-anchor="middle" class="label-ch" fill="#fd79a8">3 channels (BGR)</text>
+  <text x="515" y="456" text-anchor="middle" class="label-tiny">Denoised reflectance</text>
+
+  <line x1="515" y1="355" x2="515" y2="395" class="arrow-pink" marker-end="url(#ah-pink)"/>
+
+  <!-- ═══════════════════════════════════════════════
+       SECTION 3: Direct pass-through of I_low
+       ═══════════════════════════════════════════════ -->
+  <rect x="750" y="30" width="200" height="80" class="box-input"/>
+  <text x="850" y="55" text-anchor="middle" class="label-main" fill="#74b9ff">I_low (Pass-through)</text>
+  <text x="850" y="75" text-anchor="middle" class="label-ch" fill="#74b9ff">3 channels (BGR)</text>
+  <text x="850" y="92" text-anchor="middle" class="label-tiny">Original low-light image</text>
+
+  <!-- Dashed line connecting input to pass-through copy -->
+  <line x1="240" y1="70" x2="750" y2="70" stroke="#74b9ff" stroke-width="1.5" stroke-dasharray="5,4"/>
+
+  <!-- ═══════════════════════════════════════════════
+       SECTION 4: Concatenation
+       ═══════════════════════════════════════════════ -->
+  <rect x="250" y="560" width="600" height="80" class="box-concat"/>
+  <text x="550" y="588" text-anchor="middle" class="label-main" fill="#c4b5fd">⊕ Channel Concatenation</text>
+  <text x="550" y="610" text-anchor="middle" class="label-eq">
+    inp = concat[ I_low(3) | R_low(3) | I_tv(1) ]
+  </text>
+  <text x="550" y="628" text-anchor="middle" class="label-ch" fill="#c4b5fd">→ 7-channel tensor  (H × W × 7)</text>
+
+  <!-- Arrows into concatenation -->
+  <!-- I_low pass-through → concat -->
+  <path d="M 850,110 L 850,540 Q 850,560 750,575 L 850,575" class="arrow-blue" fill="none"/>
+  <line x1="850" y1="540" x2="850" y2="560" class="arrow-blue" marker-end="url(#ah-blue)"/>
+  <text x="862" y="350" class="label-ch" fill="#74b9ff" transform="rotate(90,862,350)">I_low (3ch)</text>
+
+  <!-- R_low → concat -->
+  <line x1="515" y1="465" x2="515" y2="560" class="arrow-pink" marker-end="url(#ah-pink)"/>
+  <text x="528" y="515" class="label-ch" fill="#fd79a8">R_low (3ch)</text>
+
+  <!-- I_tv → concat -->
+  <path d="M 185,465 L 185,530 Q 185,555 250,575" class="arrow-yellow" fill="none" marker-end="url(#ah-yellow)"/>
+  <text x="170" y="505" class="label-ch" fill="#fdcb6e">I_tv (1ch)</text>
+
+  <!-- ═══════════════════════════════════════════════
+       SECTION 5: Model
+       ═══════════════════════════════════════════════ -->
+  <rect x="340" y="670" width="420" height="80" class="box-model"/>
+  <text x="550" y="698" text-anchor="middle" class="label-main" fill="#00cec9">🧠 Restormer U-Net (4-level)</text>
+  <text x="550" y="718" text-anchor="middle" class="label-sub">MDTA + GDFN · width=32 · depths=(2,2,2,4) · ~5M params</text>
+  <text x="550" y="736" text-anchor="middle" class="label-tiny">Stem 3×3 Conv (7→32ch) → Encoder → Bottleneck → Decoder → Sigmoid</text>
+
+  <line x1="550" y1="640" x2="550" y2="670" class="arrow-accent" marker-end="url(#ah-accent)"/>
+  <text x="565" y="658" class="label-ch" fill="#c4b5fd">7ch</text>
+
+  <!-- Output -->
+  <rect x="850" y="690" width="210" height="55" class="box-output"/>
+  <text x="955" y="714" text-anchor="middle" class="label-main" fill="#00b894">✨ Enhanced Image</text>
+  <text x="955" y="732" text-anchor="middle" class="label-ch" fill="#00b894">3 channels (BGR)</text>
+
+  <line x1="760" y1="715" x2="850" y2="715" class="arrow-cyan" marker-end="url(#ah-cyan)"/>
+  <text x="805" y="706" class="label-ch" fill="#00cec9">3ch</text>
+
+  <!-- ═══ Channel count badges ═══ -->
+  <!-- Blue badge for I_low -->
+  <rect x="895" y="118" width="50" height="22" rx="6" fill="#1e3a5f" stroke="#74b9ff" stroke-width="1.5"/>
+  <text x="920" y="133" text-anchor="middle" class="label-ch" fill="#74b9ff">3ch</text>
+
+  <!-- Pink badge for R_low -->
+  <rect x="558" y="470" width="50" height="22" rx="6" fill="#3b1a3b" stroke="#fd79a8" stroke-width="1.5"/>
+  <text x="583" y="485" text-anchor="middle" class="label-ch" fill="#fd79a8">3ch</text>
+
+  <!-- Yellow badge for I_tv -->
+  <rect x="130" y="470" width="50" height="22" rx="6" fill="#3b2e1a" stroke="#fdcb6e" stroke-width="1.5"/>
+  <text x="155" y="485" text-anchor="middle" class="label-ch" fill="#fdcb6e">1ch</text>
+
+</svg>
+</div>
+
+<!-- ═══ Legend ═══ -->
+<div class="legend">
+  <div class="legend-card">
+    <h3><span class="dot" style="background:#74b9ff"></span> I_low — Low-Light Image (3ch)</h3>
+    <p>The original low-light input image in BGR format. Passed directly as the first 3 channels of the 7-channel input — provides raw color and brightness information.</p>
+  </div>
+  <div class="legend-card">
+    <h3><span class="dot" style="background:#fd79a8"></span> R_low — Reflectance (3ch)</h3>
+    <p>Computed via Retinex theory: <code>R = I_low / (I_smooth + ε)</code>. The illumination-invariant surface color. Bilateral-filtered (<code>d=9, σ_c=25, σ_s=10</code>) for denoising. Channels 4–6 of the input.</p>
+  </div>
+  <div class="legend-card">
+    <h3><span class="dot" style="background:#fdcb6e"></span> I_tv — Illumination Map (1ch)</h3>
+    <p>Estimated via <code>max(B,G,R)</code> per pixel, then bilateral-smoothed (<code>d=15, σ_c=75, σ_s=75</code>). Captures the scene lighting structure. Channel 7 of the input.</p>
+  </div>
+  <div class="legend-card">
+    <h3><span class="dot" style="background:#6c5ce7"></span> Retinex Theory: S = R × I</h3>
+    <p>A scene <b>S</b> is the product of <b>Reflectance R</b> (intrinsic surface color) and <b>Illumination I</b> (lighting). By decomposing the low-light image, the model gets explicit structural priors about lighting and color, enabling better enhancement.</p>
+  </div>
+</div>
+
+</body>
+</html>

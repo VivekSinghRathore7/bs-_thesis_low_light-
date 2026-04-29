@@ -32,11 +32,11 @@ from tqdm import tqdm
 
 # Local imports
 from retinex_utils import decompose_retinex
-from models_pix2pix import (
+from models_p2_disentangled import (
     IllumNetV2, ReflecNetV2, MultiScaleRefineBlock,
     ConditionalPatchDiscriminator, DualScaleDiscriminator, EMA
 )
-from losses import (
+from losses_all_pipelines import (
     CharbonnierLoss, SSIMLoss, MultiScaleSSIMLoss,
     VGGPerceptualLoss, LPIPSLoss, ColorConsistencyLoss,
     ReflectanceLossV2, CombinedLossV2, ReconstructionConsistencyLoss,

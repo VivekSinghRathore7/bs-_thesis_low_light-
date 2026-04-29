@@ -3,7 +3,7 @@ import torch
 import sys
 
 try:
-    from models_pix2pix import IllumNetV2, ReflecNetV2, MultiScaleRefineBlock, DualScaleDiscriminator
+    from models_p2_disentangled import IllumNetV2, ReflecNetV2, MultiScaleRefineBlock, DualScaleDiscriminator
     print("Models imported OK")
 
     x1 = torch.randn(1, 1, 384, 384).cuda()
@@ -28,7 +28,7 @@ try:
     print(f"Params: Refine={sum(p.numel() for p in refine.parameters()):,}")
     print(f"Params: Disc={sum(p.numel() for p in disc.parameters()):,}")
 
-    from losses import CombinedLossV2, ReflectanceLossV2
+    from losses_all_pipelines import CombinedLossV2, ReflectanceLossV2
     print("\nLosses imported OK")
 
     gt = torch.randn(1, 3, 384, 384).cuda().clamp(0, 1)

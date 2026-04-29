@@ -1,12 +1,5 @@
 """
-train.py
-Train all 3 pipelines on the LOL dataset.
-
-Usage:
-    python train.py --pipeline 1 --epochs 100 --data_root datasets/LOL_dataset
-    python train.py --pipeline 2 --epochs 100 --data_root datasets/LOL_dataset
-    python train.py --pipeline 3 --epochs 100 --data_root datasets/LOL_dataset
-    python train.py --pipeline all --epochs 100 --data_root datasets/LOL_dataset
+Main training script for LOL-v1.
 """
 
 import os
@@ -18,11 +11,11 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from dataset import Pipeline1Dataset, Pipeline2Dataset, Pipeline3Dataset
-from models import (
+from datasets_all_pipelines import Pipeline1Dataset, Pipeline2Dataset, Pipeline3Dataset
+from models_p1_p3_unet import (
     UNetGenerator, IllumNet, ReflecNet, RefineBlock, PatchDiscriminator
 )
-from losses import CombinedLoss, ReflectanceLoss, ReconstructionConsistencyLoss
+from losses_all_pipelines import CombinedLoss, ReflectanceLoss, ReconstructionConsistencyLoss
 
 
 def get_device():
