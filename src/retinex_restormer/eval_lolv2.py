@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, os.path.join(ROOT, "src", "newpipline", "llie_project"))
+sys.path.insert(0, os.path.join(ROOT, "src", "gan_pipelines"))  # for retinex_utils
 sys.path.insert(0, ROOT)
 
 from retinex_utils import decompose_retinex
@@ -109,20 +109,29 @@ def tta_forward(fn, inp, device):
     return torch.stack(preds).mean(0).to(device)
 
 
-# ── SOTA comparison table ─────────────────────────────────────────────────────
+# ── SOTA comparison table (LOL-v2) ────────────────────────────────────────────
+# Format: (name, params, psnr, ssim, lpips)  — None for unavailable values
 
-SOTA_LOLv1 = [
-    ("RetinexNet (BMVC'18)",      16.77, 0.560, None),
-    ("KinD++ (IJCV'21)",          21.30, 0.823, None),
-    ("URetinex-Net (CVPR'22)",    21.32, 0.835, 1.220),
-    ("SNR-Aware (CVPR'22)",       21.48, 0.849, None),
-    ("GSAD (NeurIPS'23)",         23.23, 0.852, None),
-    ("MBLLIE-Net (SciRep'24)",    23.33, 0.829, 0.116),
-    ("LLFormer (AAAI'23)",        23.65, 0.857, None),
-    ("MIRNet-v2 (TPAMI'22)",      24.74, 0.851, None),
-    ("Diff-Retinex++ (TPAMI'25)", 24.67, 0.867, 0.101),
-    ("TFFormer (CVPR'25)",        26.13, 0.888, 0.061),
-    ("HFL (DCN'25)",              27.26, 0.930, 0.100),
+SOTA_TABLE = [
+    ("Zero-DCE",        "0.07M",   None,  None,  None),
+    ("RetinexNet",      "0.84M",   17.13, 0.798, None),
+    ("EnlightenGAN",    "8.63M",   None,  None,  None),
+    ("KinD++",          "—",       None,  None,  None),
+    ("SNR-Net",         "—",       21.48, 0.849, 0.876),
+    ("URetinex-Net",    "1.48M",   None,  None,  None),
+    ("SNR-Aware",       "—",       None,  None,  None),
+    ("Restormer",       "26.13M",  21.41, 0.830, 0.861),
+    ("MIRNet",          "—",       None,  None,  None),
+    ("RetinexFormer",   "—",       22.80, 0.840, 0.930),
+    ("GLARE",           "—",       22.51, 0.870, None),
+    ("LLFormer",        "24.5M",   None,  None,  None),
+    ("PairLIE",         "—",       None,  None,  None),
+]
+
+OURS_TABLE = [
+    ("Baseline cGAN",      "~2.5M",  16.28, 0.825, 0.214),
+    ("Disentangled GAN",   "~2.8M",  20.04, 0.827, 0.261),
+    ("Ensemble GAN",       "~6.0M",  20.59, 0.873, 0.230),
 ]
 
 
@@ -185,20 +194,27 @@ def evaluate(args):
 
     pm, sm, lm = np.mean(psnrs), np.mean(ssims), np.nanmean(lpipss)
 
-    sep = "─" * 65
+    def fmt(v, w, dec):
+        return f"{v:>{w}.{dec}f}" if v is not None else f"{'—':>{w}}"
+
+    sep = "─" * 75
     print(f"\n{sep}")
-    print(f"  LOL-v2 Real — RetinexRestormer Results")
+    print(f"{'Method':<24} {'Params':>8} {'PSNR↑':>8} {'SSIM↑':>8} {'LPIPS↓':>8}")
     print(sep)
+    for name, params, p, s, l in SOTA_TABLE:
+        print(f"{name:<24} {params:>8} {fmt(p,8,2)} {fmt(s,8,3)} {fmt(l,8,3)}")
+    print(sep)
+    for name, params, p, s, l in OURS_TABLE:
+        print(f"{name:<24} {params:>8} {fmt(p,8,2)} {fmt(s,8,3)} {fmt(l,8,3)}")
     suffix = " +TTA×8" if args.tta else ""
-    print(f"  PSNR  : {pm:.4f} dB")
-    print(f"  SSIM  : {sm:.4f}")
-    print(f"  LPIPS : {lm:.4f}")
-    print(f"  Mode  : {'TTA×8' if args.tta else 'Standard'}")
-    print(f"  Images: {len(psnrs)}")
+    label  = f"RetinexRestormer{suffix}"
+    print(f"\033[1m{label:<24} {'~5.06M':>8} {pm:>8.2f} {sm:>8.3f} {lm:>8.3f}\033[0m")
     print(sep)
 
-    # Compare with LOL-v1 results
-    print(f"\n  For reference, LOL-v1 results: PSNR=23.75, SSIM=0.886, LPIPS=0.104")
+    # Rank among all methods with available PSNR
+    all_psnrs = [p for _, _, p, _, _ in SOTA_TABLE + OURS_TABLE if p is not None]
+    rank = sum(1 for x in all_psnrs if x > pm) + 1
+    print(f"\nRanking: #{rank} / {len(all_psnrs)+1} on LOL-v2 (by PSNR)")
 
     results = {
         "dataset": "LOL-v2-Real",
